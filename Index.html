@@ -203,7 +203,7 @@
       <!-- ---------- DATA ENTRY ---------- -->
       <section id="entryScreen" class="screen active">
         <div class="card">
-          <h2>New File Entry</h2>
+          <h2 id="entryHeading">New File Entry</h2>
 
           <div class="two-col">
             <div>
@@ -234,6 +234,10 @@
           <textarea id="f_subject" placeholder="Brief subject / description of the file"></textarea>
 
           <label>Photo of the File</label>
+          <div id="existingPhotoNote" style="display:none; font-size:12.5px; margin-top:6px;">
+            <a id="existingPhotoLink" href="#" target="_blank" class="photo-link">View current photo</a>
+            <span style="color:var(--muted);"> &mdash; choose a new photo below to replace it, or leave blank to keep it.</span>
+          </div>
           <input type="file" id="f_photo" accept="image/*" capture="environment" onchange="previewPhoto()">
           <img id="photoPreview" class="thumb-preview">
 
@@ -241,6 +245,7 @@
           <textarea id="f_remarks" placeholder="Any additional notes"></textarea>
 
           <button class="btn" id="saveBtn" onclick="submitRecord()">Save Record</button>
+          <button class="btn secondary" id="cancelEditBtn" style="display:none;" onclick="cancelEdit()">Cancel Edit</button>
           <div id="entryMsg"></div>
         </div>
       </section>
@@ -441,6 +446,10 @@
     reader.readAsDataURL(file);
   }
 
+  let EDITING_SLNO = null;
+  let EXISTING_PHOTO_URL = '';
+  const RESULTS_CACHE = {}; // slNo -> record, populated whenever Search/Reports render results
+
   function submitRecord() {
     const fileNumber = document.getElementById('f_fileNumber').value.trim();
     const fileDate = document.getElementById('f_fileDate').value;
@@ -459,7 +468,7 @@
 
     function saveWithPhoto(photoData, photoName) {
       showLoading(true);
-      callServer('addRecord', [SESSION_TOKEN, {
+      const payload = {
         fileNumber: fileNumber,
         fileDate: fileDate,
         rackNumber: rackNumber,
@@ -468,12 +477,20 @@
         remarks: remarks,
         photoData: photoData,
         photoName: photoName
-      }])
-        .then(function (res) {
+      };
+      const isEditing = EDITING_SLNO !== null;
+      if (isEditing) payload.existingPhotoUrl = EXISTING_PHOTO_URL;
+      const call = isEditing
+        ? callServer('updateRecord', [SESSION_TOKEN, EDITING_SLNO, payload])
+        : callServer('addRecord', [SESSION_TOKEN, payload]);
+
+      call.then(function (res) {
           showLoading(false);
           if (res.success) {
-            msgEl.innerHTML = '<div class="msg ok">' + res.message + ' (Sl.No. ' + res.slNo + ')</div>';
+            msgEl.innerHTML = '<div class="msg ok">' + res.message + (res.slNo ? ' (Sl.No. ' + res.slNo + ')' : '') + '</div>';
+            const wasEditing = isEditing;
             clearEntryForm();
+            if (wasEditing) exitEditMode();
           } else {
             msgEl.innerHTML = '<div class="msg err">' + res.message + '</div>';
           }
@@ -500,6 +517,71 @@
     document.getElementById('photoPreview').style.display = 'none';
   }
 
+  // ---------------- EDIT / DELETE ----------------
+  function startEdit(slNo) {
+    const r = RESULTS_CACHE[slNo];
+    if (!r) return;
+    EDITING_SLNO = slNo;
+    EXISTING_PHOTO_URL = r.photoUrl || '';
+
+    document.getElementById('f_fileNumber').value = r.fileNumber || '';
+    document.getElementById('f_fileDate').value = r.fileDate || '';
+    document.getElementById('f_rackNumber').value = r.rackNumber || '';
+    document.getElementById('f_villageName').value = r.villageName || '';
+    document.getElementById('f_subject').value = r.subject || '';
+    document.getElementById('f_remarks').value = r.remarks || '';
+    document.getElementById('f_photo').value = '';
+    document.getElementById('photoPreview').style.display = 'none';
+
+    const noteEl = document.getElementById('existingPhotoNote');
+    if (EXISTING_PHOTO_URL) {
+      document.getElementById('existingPhotoLink').href = EXISTING_PHOTO_URL;
+      noteEl.style.display = 'block';
+    } else {
+      noteEl.style.display = 'none';
+    }
+
+    document.getElementById('entryHeading').textContent = 'Edit File Entry (Sl.No. ' + slNo + ')';
+    document.getElementById('saveBtn').textContent = 'Update Record';
+    document.getElementById('cancelEditBtn').style.display = 'block';
+    document.getElementById('entryMsg').innerHTML = '';
+
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      if (b.getAttribute('data-tab') === 'entryScreen') showTab('entryScreen', b);
+    });
+    window.scrollTo(0, 0);
+  }
+
+  function exitEditMode() {
+    EDITING_SLNO = null;
+    EXISTING_PHOTO_URL = '';
+    document.getElementById('entryHeading').textContent = 'New File Entry';
+    document.getElementById('saveBtn').textContent = 'Save Record';
+    document.getElementById('cancelEditBtn').style.display = 'none';
+    document.getElementById('existingPhotoNote').style.display = 'none';
+  }
+
+  function cancelEdit() {
+    clearEntryForm();
+    exitEditMode();
+    document.getElementById('entryMsg').innerHTML = '';
+  }
+
+  function deleteRecordConfirm(slNo) {
+    if (!confirm('Delete record Sl.No. ' + slNo + '? This cannot be undone.')) return;
+    showLoading(true);
+    callServer('deleteRecord', [SESSION_TOKEN, slNo])
+      .then(function (res) {
+        showLoading(false);
+        if (!res.success) { alert(res.message); return; }
+        delete RESULTS_CACHE[slNo];
+        const rowEl = document.getElementById('result-' + slNo);
+        if (rowEl) rowEl.remove();
+        if (EDITING_SLNO === slNo) { clearEntryForm(); exitEditMode(); }
+      })
+      .catch(function (err) { showLoading(false); alert(err && err.message ? err.message : 'Something went wrong.'); });
+  }
+
   // ---------------- SEARCH ----------------
   function doSearch() {
     const filters = {
@@ -517,19 +599,24 @@
         showLoading(false);
         if (!res.success) { msgEl.innerHTML = '<div class="msg err">' + res.message + '</div>'; return; }
         if (res.results.length === 0) { msgEl.innerHTML = '<div class="msg err">No matching records found.</div>'; return; }
+        res.results.forEach(r => RESULTS_CACHE[r.slNo] = r);
         resultsEl.innerHTML = res.results.map(renderResultItem).join('');
       })
       .catch(function (err) { showLoading(false); msgEl.innerHTML = '<div class="msg err">' + (err && err.message ? err.message : 'Something went wrong.') + '</div>'; });
   }
 
   function renderResultItem(r) {
-    return '<div class="result-item">' +
+    return '<div class="result-item" id="result-' + r.slNo + '">' +
       '<div class="row1"><span>' + escapeHtml(r.fileNumber) + ' &nbsp;(' + escapeHtml(r.fileDate) + ')</span><span>Sl.No. ' + r.slNo + '</span></div>' +
       '<div class="meta">Village: ' + escapeHtml(r.villageName) + ' &nbsp;|&nbsp; Rack: ' + escapeHtml(r.rackNumber) + '<br>' +
       'Subject: ' + escapeHtml(r.subject) +
       (r.remarks ? '<br>Remarks: ' + escapeHtml(r.remarks) : '') +
       '<br>Entered by ' + escapeHtml(r.enteredBy) + ' on ' + r.timestamp + '</div>' +
       (r.photoUrl ? '<a class="photo-link" target="_blank" href="' + r.photoUrl + '">View Photo &rarr;</a>' : '') +
+      '<div style="margin-top:10px; display:flex; gap:8px;">' +
+      '<button class="btn small secondary" onclick="startEdit(' + JSON.stringify(String(r.slNo)) + ')">Edit</button>' +
+      '<button class="btn small danger" style="color:#fff;" onclick="deleteRecordConfirm(' + JSON.stringify(String(r.slNo)) + ')">Delete</button>' +
+      '</div>' +
       '</div>';
   }
 
@@ -557,6 +644,7 @@
           '<div class="card"><div class="stat-grid"><div class="stat-box"><div class="num">' + res.totalRecords + '</div><div class="lbl">Total Files</div></div></div>' +
           '<h2>By Village</h2>' + (villageRows || '<div class="meta">No data</div>') +
           '<h2 style="margin-top:16px;">By Rack</h2>' + (rackRows || '<div class="meta">No data</div>') + '</div>';
+        res.records.forEach(r => RESULTS_CACHE[r.slNo] = r);
         resultsEl.innerHTML = res.records.map(renderResultItem).join('');
       })
       .catch(function (err) { showLoading(false); summaryEl.innerHTML = '<div class="msg err">' + (err && err.message ? err.message : 'Something went wrong.') + '</div>'; });
