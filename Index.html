@@ -614,8 +614,8 @@
       '<br>Entered by ' + escapeHtml(r.enteredBy) + ' on ' + r.timestamp + '</div>' +
       (r.photoUrl ? '<a class="photo-link" target="_blank" href="' + r.photoUrl + '">View Photo &rarr;</a>' : '') +
       '<div style="margin-top:10px; display:flex; gap:8px;">' +
-      '<button class="btn small secondary" onclick="startEdit(' + JSON.stringify(String(r.slNo)) + ')">Edit</button>' +
-      '<button class="btn small danger" style="color:#fff;" onclick="deleteRecordConfirm(' + JSON.stringify(String(r.slNo)) + ')">Delete</button>' +
+      '<button class="btn small secondary" onclick="startEdit(\'' + String(r.slNo).replace(/'/g, "\\'") + '\')">Edit</button>' +
+      '<button class="btn small danger" style="color:#fff;" onclick="deleteRecordConfirm(\'' + String(r.slNo).replace(/'/g, "\\'") + '\')">Delete</button>' +
       '</div>' +
       '</div>';
   }
